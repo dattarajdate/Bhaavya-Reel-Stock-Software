@@ -76,11 +76,17 @@ def upgrade_db_schema():
         )
     ''')
     
-    # Insert default users if table is empty
+    # Insert default Super Admin & Operators if table is empty
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('admin', 'bhaavya123', 'ADMIN')")
+        cursor.execute("INSERT INTO users (username, password, role) VALUES ('super_admin', 'bhaavya123', 'SUPER_ADMIN')")
+        cursor.execute("INSERT INTO users (username, password, role) VALUES ('admin', 'admin123', 'ADMIN')")
         cursor.execute("INSERT INTO users (username, password, role) VALUES ('operator', 'op123', 'OPERATOR')")
+    
+    # Safety upgrade: If old 'admin' was just 'ADMIN', ensure super_admin exists
+    cursor.execute("SELECT role FROM users WHERE username = 'super_admin'")
+    if not cursor.fetchone():
+        cursor.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES ('super_admin', 'bhaavya123', 'SUPER_ADMIN')")
 
     # Paper Master Table for MSL & Reorder
     cursor.execute('''
@@ -279,10 +285,14 @@ if search_reel:
     else:
         st.sidebar.error("❌ REEL NO NOT FOUND!")
 
-# Tabs Layout Setup
-if st.session_state.user_role == "ADMIN":
+# Tabs Layout Setup based on Roles
+if st.session_state.user_role == "SUPER_ADMIN":
     tabs = st.tabs(["📊 LIVE NET STOCK BALANCE", "📥 GRN RECEIVING ENTRY (MULTIPLE)", "📉 DAILY CONSUMPTION ENTRY", "🛠️ PHYSICAL STOCK ADJUSTMENT", "🚨 MSL & LOW STOCK ALERTS", "📤 EXCEL STOCK IMPORT", "📈 CONSUMPTION REPORTS", "📋 HISTORY LOGS", "🔐 CHANGE PASSWORD & USERS"])
     tab_live, tab_rec, tab_cons, tab_adj, tab_msl, tab_import, tab_rep, tab_hist, tab_users = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7], tabs[8]
+elif st.session_state.user_role == "ADMIN":
+    tabs = st.tabs(["📊 LIVE NET STOCK BALANCE", "📥 GRN RECEIVING ENTRY (MULTIPLE)", "📉 DAILY CONSUMPTION ENTRY", "🛠️ PHYSICAL STOCK ADJUSTMENT", "🚨 MSL & LOW STOCK ALERTS", "📤 EXCEL STOCK IMPORT", "📈 CONSUMPTION REPORTS", "📋 HISTORY LOGS"])
+    tab_live, tab_rec, tab_cons, tab_adj, tab_msl, tab_import, tab_rep, tab_hist = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7]
+    tab_users = None
 else:
     tabs = st.tabs(["📥 GRN RECEIVING ENTRY (MULTIPLE)", "📉 DAILY CONSUMPTION ENTRY"])
     tab_rec, tab_cons = tabs[0], tabs[1]
@@ -607,10 +617,10 @@ with tab_cons:
                     st.rerun()
                 except Exception as e: st.error(f"Error: {e}")
 
-# TAB 4: PHYSICAL STOCK ADJUSTMENT (ADMIN ONLY RIGHTS)
+# TAB 4: PHYSICAL STOCK ADJUSTMENT
 if tab_adj:
     with tab_adj:
-        st.markdown("<h2 style='text-align: center;'>🛠️ PHYSICAL STOCK AUDIT & ADJUSTMENT (ADMIN RIGHTS)</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center;'>🛠️ PHYSICAL STOCK AUDIT & ADJUSTMENT</h2>", unsafe_allow_html=True)
         st.info("💡 Physical Stock Counting ke baad agar godown ka asal vajan software balance se alag aaye, toh yahan se adjustment karein.")
         
         adj_reel_no = st.text_input("ENTER BHAAVYA REEL NO TO ADJUST *", key="adj_reel_search_key")
@@ -862,15 +872,16 @@ if tab_hist:
             df_cons_hist = get_data(query_fix_cons, (str(st.session_state.c_start), str(st.session_state.c_end)))
             st.dataframe(df_cons_hist, use_container_width=True)
 
-# TAB 9: CHANGE PASSWORD & USERS (ADMIN ONLY)
+# TAB 9: CHANGE PASSWORD & USERS (SUPER ADMIN ONLY)
 if tab_users:
     with tab_users:
-        st.markdown("<h2 style='text-align: center;'>🔐 PASSWORD MANAGEMENT & USER PROFILES</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center;'>🔐 SUPER ADMIN - PASSWORD & USER CONTROL</h2>", unsafe_allow_html=True)
+        st.info("💡 Yeh panel sirf **SUPER_ADMIN** ke paas hai. Yahan aap decide kar sakte hain ki kisko kaisa role dena hai aur kiska password change karna hai.")
         
         col_u1, col_u2 = st.columns(2)
         
         with col_u1:
-            st.markdown("### 🔑 CHANGE EXISTING USER PASSWORD")
+            st.markdown("### 🔑 CHANGE USER PASSWORD")
             df_users = get_data("SELECT username, role FROM users")
             user_list = list(df_users['username'].values)
             
@@ -890,23 +901,23 @@ if tab_users:
                         st.rerun()
 
         with col_u2:
-            st.markdown("### ➕ ADD NEW USER")
+            st.markdown("### ➕ CREATE NEW USER & ASSIGN ROLE")
             with st.form("add_user_form"):
                 new_username = st.text_input("NEW USERNAME")
                 new_password = st.text_input("PASSWORD", type="password")
-                new_role = st.selectbox("ASSIGN ROLE", ["ADMIN", "OPERATOR"])
+                new_role = st.selectbox("ASSIGN ACCESS ROLE", ["ADMIN", "OPERATOR"])
                 
-                if st.form_submit_button("CREATE NEW USER"):
+                if st.form_submit_button("CREATE USER"):
                     if not new_username or not new_password:
                         st.error("❌ Username and Password are required!")
                     else:
                         try:
                             run_query("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (new_username.strip(), new_password.strip(), new_role))
-                            st.success(f"🎉 New user `{new_username.strip()}` created successfully with role `{new_role}`!")
+                            st.success(f"🎉 New user `{new_username.strip()}` created with role `{new_role}`!")
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Error creating user (Username might already exist): {e}")
 
         st.write("---")
-        st.markdown("### 📋 ACTIVE SYSTEM USERS LIST")
+        st.markdown("### 📋 ACTIVE SYSTEM USERS & ROLES LIST")
         st.dataframe(df_users, use_container_width=True)
