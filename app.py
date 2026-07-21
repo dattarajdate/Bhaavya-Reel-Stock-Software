@@ -19,6 +19,39 @@ def upgrade_db_schema():
     except:
         pass
 
+    # Ensure tables exist first
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS receiving (
+            sr INTEGER,
+            date TEXT,
+            company_reel TEXT PRIMARY KEY,
+            mill_reel TEXT,
+            mill TEXT,
+            gsm INTEGER,
+            bf INTEGER,
+            deckle INTEGER,
+            weight REAL,
+            shade TEXT,
+            supplier TEXT,
+            location TEXT,
+            remarks TEXT,
+            rate REAL DEFAULT 0.0,
+            trans_charges REAL DEFAULT 0.0,
+            grn_no TEXT DEFAULT "",
+            bill_no TEXT DEFAULT ""
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS consumption (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            company_reel TEXT,
+            weight_consumed REAL,
+            machine TEXT
+        )
+    ''')
+
     try:
         cursor.execute("SELECT rate, trans_charges, grn_no, bill_no FROM receiving LIMIT 1")
     except sqlite3.OperationalError:
@@ -34,6 +67,21 @@ def upgrade_db_schema():
     cursor.execute('CREATE TABLE IF NOT EXISTS mill_master (id INTEGER PRIMARY KEY AUTOINCREMENT, mill_name TEXT UNIQUE NOT NULL)')
     cursor.execute('CREATE TABLE IF NOT EXISTS shade_master (id INTEGER PRIMARY KEY AUTOINCREMENT, shade_name TEXT UNIQUE NOT NULL)')
     
+    # Users Table for Dynamic Database-driven Login & Passwords
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL
+        )
+    ''')
+    
+    # Insert default users if table is empty
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO users (username, password, role) VALUES ('admin', 'bhaavya123', 'ADMIN')")
+        cursor.execute("INSERT INTO users (username, password, role) VALUES ('operator', 'op123', 'OPERATOR')")
+
     # Paper Master Table for MSL & Reorder
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS paper_master (
@@ -47,13 +95,19 @@ def upgrade_db_schema():
         )
     ''')
     
-    cursor.execute("SELECT DISTINCT mill FROM receiving WHERE mill IS NOT NULL AND mill != ''")
-    for mill in cursor.fetchall():
-        if mill[0]: cursor.execute("INSERT OR IGNORE INTO mill_master (mill_name) VALUES (?)", (mill[0].upper(),))
+    try:
+        cursor.execute("SELECT DISTINCT mill FROM receiving WHERE mill IS NOT NULL AND mill != ''")
+        for mill in cursor.fetchall():
+            if mill[0]: cursor.execute("INSERT OR IGNORE INTO mill_master (mill_name) VALUES (?)", (mill[0].upper(),))
+    except:
+        pass
             
-    cursor.execute("SELECT DISTINCT shade FROM receiving WHERE shade IS NOT NULL AND shade != ''")
-    for shade in cursor.fetchall():
-        if shade[0]: cursor.execute("INSERT OR IGNORE INTO shade_master (shade_name) VALUES (?)", (shade[0].upper(),))
+    try:
+        cursor.execute("SELECT DISTINCT shade FROM receiving WHERE shade IS NOT NULL AND shade != ''")
+        for shade in cursor.fetchall():
+            if shade[0]: cursor.execute("INSERT OR IGNORE INTO shade_master (shade_name) VALUES (?)", (shade[0].upper(),))
+    except:
+        pass
     
     for default_shade in ["NATURAL", "GOLDEN", "YELLOW", "WHITE", "OTHER"]:
         cursor.execute("INSERT OR IGNORE INTO shade_master (shade_name) VALUES (?)", (default_shade,))
@@ -63,24 +117,31 @@ def upgrade_db_schema():
 
 upgrade_db_schema()
 
-# --- LOGIN SYSTEM ---
+# --- DYNAMIC DATABASE LOGIN SYSTEM ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
+if "logged_user" not in st.session_state:
+    st.session_state.logged_user = ""
 
 def check_login():
-    user = st.session_state.username_input
-    pwd = st.session_state.password_input
-    if user == "admin" and pwd == "bhaavya123":
+    user = st.session_state.username_input.strip()
+    pwd = st.session_state.password_input.strip()
+    
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    cursor.execute("SELECT role FROM users WHERE username = ? AND password = ?", (user, pwd))
+    res = cursor.fetchone()
+    conn.close()
+    
+    if res:
         st.session_state.logged_in = True
-        st.session_state.user_role = "ADMIN"
-    elif user == "operator" and pwd == "op123":
-        st.session_state.logged_in = True
-        st.session_state.user_role = "OPERATOR"
+        st.session_state.user_role = res[0]
+        st.session_state.logged_user = user
 
 if not st.session_state.logged_in:
-    st.markdown("<h2 style='text-align: center;'>🔐 BHAAVYA ECOPACK - MULTI-USER SECURE LOGIN</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center;'>🔐 BHAAVYA ECOPACK - SECURE LOGIN</h2>", unsafe_allow_html=True)
     with st.form("login_form"):
         st.text_input("USERNAME", key="username_input")
         st.text_input("PASSWORD", type="password", key="password_input")
@@ -168,6 +229,13 @@ def handle_audit_shortcut():
 
 
 # --- MAIN TITLE & ENHANCED SIDEBAR QUICK REEL SEARCH ---
+st.sidebar.write(f"👤 **Logged User:** `{st.session_state.logged_user}` ({st.session_state.user_role})")
+if st.sidebar.button("🚪 LOGOUT"):
+    st.session_state.logged_in = False
+    st.session_state.user_role = None
+    st.session_state.logged_user = ""
+    st.rerun()
+
 st.sidebar.write("---")
 st.sidebar.header("🔍 QUICK REEL SEARCH")
 search_reel = st.sidebar.text_input("ENTER BHAAVYA REEL NO:")
@@ -213,12 +281,12 @@ if search_reel:
 
 # Tabs Layout Setup
 if st.session_state.user_role == "ADMIN":
-    tabs = st.tabs(["📊 LIVE NET STOCK BALANCE", "📥 GRN RECEIVING ENTRY (MULTIPLE)", "📉 DAILY CONSUMPTION ENTRY", "🛠️ PHYSICAL STOCK ADJUSTMENT", "🚨 MSL & LOW STOCK ALERTS", "📤 EXCEL STOCK IMPORT", "📈 CONSUMPTION REPORTS", "📋 HISTORY LOGS"])
-    tab_live, tab_rec, tab_cons, tab_adj, tab_msl, tab_import, tab_rep, tab_hist = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7]
+    tabs = st.tabs(["📊 LIVE NET STOCK BALANCE", "📥 GRN RECEIVING ENTRY (MULTIPLE)", "📉 DAILY CONSUMPTION ENTRY", "🛠️ PHYSICAL STOCK ADJUSTMENT", "🚨 MSL & LOW STOCK ALERTS", "📤 EXCEL STOCK IMPORT", "📈 CONSUMPTION REPORTS", "📋 HISTORY LOGS", "🔐 CHANGE PASSWORD & USERS"])
+    tab_live, tab_rec, tab_cons, tab_adj, tab_msl, tab_import, tab_rep, tab_hist, tab_users = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4], tabs[5], tabs[6], tabs[7], tabs[8]
 else:
     tabs = st.tabs(["📥 GRN RECEIVING ENTRY (MULTIPLE)", "📉 DAILY CONSUMPTION ENTRY"])
     tab_rec, tab_cons = tabs[0], tabs[1]
-    tab_live, tab_adj, tab_msl, tab_import, tab_rep, tab_hist = None, None, None, None, None, None
+    tab_live, tab_adj, tab_msl, tab_import, tab_rep, tab_hist, tab_users = None, None, None, None, None, None, None
 
 # TAB 1: LIVE BALANCE WITH CHART AT THE VERY TOP
 if tab_live:
@@ -245,7 +313,6 @@ if tab_live:
         try:
             df_base = get_data(query_live)
             
-            # --- 1. CAPTURE FILTER SLICERS SELECTIONS FIRST ---
             unique_mills_df = df_base.drop_duplicates(subset=["CLEAN_MILL_KEY"])
             available_mills = sorted(list(unique_mills_df["MILL"].dropna().unique()))
             
@@ -264,7 +331,6 @@ if tab_live:
             if selected_bf: df_filtered = df_filtered[df_filtered["BF"].isin(selected_bf)]
             if selected_shade: df_filtered = df_filtered[df_filtered["SHADE"].isin(selected_shade)]
 
-            # --- 2. RENDER CHART AT THE VERY TOP (ABOVE BUTTONS) ---
             df_live_reels = df_filtered[df_filtered['SUM OF BALANCE WEIGHT'] > 0]
             if not df_live_reels.empty:
                 chart_df = df_live_reels.groupby("MILL").agg(
@@ -304,7 +370,6 @@ if tab_live:
 
             st.write("---")
 
-            # --- 3. FILTER SLICERS RENDERED BELOW CHART ---
             st.markdown("### 🎛️ CLICK BUTTONS TO FILTER (EXCEL SLICERS STYLE)")
             st.pills("🏭 MILL", available_mills, selection_mode="multi", key="pills_mills_key")
             
@@ -611,7 +676,6 @@ if tab_msl:
         st.markdown("<h2 style='text-align: center;'>🚨 DECKLE-GSM-BF-SHADE WISE MINIMUM STOCK LEVEL (MSL) & ALERTS</h2>", unsafe_allow_html=True)
         st.info("💡 Yahan aap unique Deckle, GSM, BF, aur Shade combination ke liye **MSL (Minimum Stock Level)** set kar sakte hain. Jab bhi stock usse kam hoga, red alert show hoga!")
 
-        # Populate paper_master with any missing active combinations from receiving
         run_query("""
             INSERT OR IGNORE INTO paper_master (gsm, bf, deckle, shade, msl, reorder_qty)
             SELECT DISTINCT gsm, bf, deckle, UPPER(shade), 0.0, 0.0 
@@ -619,7 +683,6 @@ if tab_msl:
             WHERE gsm > 0 AND bf > 0 AND deckle > 0
         """)
 
-        # Fetch current unique combinations grouped with their live stock
         query_msl_view = """
             SELECT 
                 p.gsm as [GSM], 
@@ -641,7 +704,6 @@ if tab_msl:
         df_msl_check = get_data(query_msl_view)
 
         if not df_msl_check.empty:
-            # Check for low stock alerts
             df_msl_check['STATUS'] = df_msl_check.apply(
                 lambda row: '🔴 LOW STOCK ALERT' if row['CURRENT STOCK (KG)'] < row['MSL (KG)'] else '🟢 SUFFICIENT', axis=1
             )
@@ -664,7 +726,6 @@ if tab_msl:
                 sel_dec = col_u3.selectbox("SELECT DECKLE", sorted(df_msl_check['DECKLE (MM)'].unique()))
                 sel_shd = col_u4.selectbox("SELECT SHADE", sorted(df_msl_check['SHADE'].unique()))
                 
-                # Get current msl/reorder if exists
                 existing_row = df_msl_check[(df_msl_check['GSM'] == sel_gsm) & (df_msl_check['BF'] == sel_bf) & (df_msl_check['DECKLE (MM)'] == sel_dec) & (df_msl_check['SHADE'] == sel_shd)]
                 curr_msl_val = float(existing_row['MSL (KG)'].values[0]) if not existing_row.empty else 0.0
                 curr_reorder_val = float(existing_row['REORDER QTY (KG)'].values[0]) if not existing_row.empty else 0.0
@@ -800,3 +861,52 @@ if tab_hist:
             """
             df_cons_hist = get_data(query_fix_cons, (str(st.session_state.c_start), str(st.session_state.c_end)))
             st.dataframe(df_cons_hist, use_container_width=True)
+
+# TAB 9: CHANGE PASSWORD & USERS (ADMIN ONLY)
+if tab_users:
+    with tab_users:
+        st.markdown("<h2 style='text-align: center;'>🔐 PASSWORD MANAGEMENT & USER PROFILES</h2>", unsafe_allow_html=True)
+        
+        col_u1, col_u2 = st.columns(2)
+        
+        with col_u1:
+            st.markdown("### 🔑 CHANGE EXISTING USER PASSWORD")
+            df_users = get_data("SELECT username, role FROM users")
+            user_list = list(df_users['username'].values)
+            
+            with st.form("change_pwd_form"):
+                sel_user = st.selectbox("SELECT USERNAME", user_list)
+                new_pwd1 = st.text_input("NEW PASSWORD", type="password")
+                new_pwd2 = st.text_input("CONFIRM NEW PASSWORD", type="password")
+                
+                if st.form_submit_button("UPDATE PASSWORD"):
+                    if not new_pwd1 or not new_pwd2:
+                        st.error("❌ Password fields cannot be empty!")
+                    elif new_pwd1 != new_pwd2:
+                        st.error("❌ Both passwords do not match!")
+                    else:
+                        run_query("UPDATE users SET password = ? WHERE username = ?", (new_pwd1.strip(), sel_user))
+                        st.success(f"🎉 Password updated successfully for user `{sel_user}`!")
+                        st.rerun()
+
+        with col_u2:
+            st.markdown("### ➕ ADD NEW USER")
+            with st.form("add_user_form"):
+                new_username = st.text_input("NEW USERNAME")
+                new_password = st.text_input("PASSWORD", type="password")
+                new_role = st.selectbox("ASSIGN ROLE", ["ADMIN", "OPERATOR"])
+                
+                if st.form_submit_button("CREATE NEW USER"):
+                    if not new_username or not new_password:
+                        st.error("❌ Username and Password are required!")
+                    else:
+                        try:
+                            run_query("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (new_username.strip(), new_password.strip(), new_role))
+                            st.success(f"🎉 New user `{new_username.strip()}` created successfully with role `{new_role}`!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error creating user (Username might already exist): {e}")
+
+        st.write("---")
+        st.markdown("### 📋 ACTIVE SYSTEM USERS LIST")
+        st.dataframe(df_users, use_container_width=True)
